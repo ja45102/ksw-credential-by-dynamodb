@@ -1,7 +1,9 @@
 # ksw-credential-by-dynamodb
 
 A small Go library that reads a credential document from a DynamoDB table
-(configured via `TABLE_NAME`) by its partition key (`key`).
+(configured via `TABLE_NAME`) by its partition key (`key`). The credential value
+is returned only when the item is enabled; a missing **or disabled** credential
+is reported as `ErrNotFound`.
 
 Each read also "touches" the item:
 

@@ -1,7 +1,9 @@
 // Package credential reads credential documents from a DynamoDB table (named by
-// the TABLE_NAME environment variable) by partition key. Each read is
-// also a "touch": it records the access time and, for enabled credentials, also
-// records the last-used time and increments a usage counter.
+// the TABLE_NAME environment variable) by partition key. The credential value
+// is returned only when the item is enabled; a missing or disabled credential
+// is reported as ErrNotFound. Each read is also a "touch": it records the access
+// time and, for enabled credentials, also records the last-used time and
+// increments a usage counter.
 package credential
 
 import (
@@ -21,7 +23,7 @@ import (
 )
 
 // version is the semantic version of this library.
-const version = "1.0.0"
+const version = "1.0.1"
 
 // timeLayout is RFC3339 with millisecond precision, in UTC.
 const timeLayout = "2006-01-02T15:04:05.000Z07:00"
@@ -61,8 +63,9 @@ var (
 
 // Get looks up the credential for key, setting lastAccessedAt to the current
 // time and, when the credential is enabled, also setting lastUsedAt and
-// incrementing usageCounter. It returns the credential value, or ErrNotFound if
-// no item exists for the key.
+// incrementing usageCounter. It returns the credential value only when the item
+// is enabled; if no item exists for the key or the credential is disabled, it
+// returns ErrNotFound.
 //
 // The DynamoDB client is built once, on the first call, from the
 // AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION environment
@@ -111,7 +114,8 @@ func newStore(ctx context.Context) (*store, error) {
 // get fetches the credential identified by key. As a side effect it sets
 // lastAccessedAt to the current time and, when the credential is enabled, also
 // sets lastUsedAt and increments usageCounter by 1. It returns the credential
-// value. If no item exists for the key, it returns ErrNotFound.
+// value only when the item is enabled; a missing or disabled credential is
+// reported as ErrNotFound.
 func (s *store) get(ctx context.Context, key string) (string, error) {
 	now := time.Now().UTC().Format(timeLayout)
 	keyAttr := map[string]types.AttributeValue{
@@ -147,8 +151,10 @@ func (s *store) get(ctx context.Context, key string) (string, error) {
 	}
 
 	// Attempt 2 — disabled path: touch lastAccessedAt only, still requiring the
-	// item to exist so a missing key is reported as ErrNotFound.
-	out, err = s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	// item to exist so a missing key is reported as ErrNotFound. A disabled
+	// credential is withheld and reported as ErrNotFound too, so the value is
+	// returned only when the credential is enabled (Attempt 1).
+	_, err = s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:           aws.String(s.tableName),
 		Key:                 keyAttr,
 		UpdateExpression:    aws.String("SET lastAccessedAt = :now"),
@@ -159,10 +165,10 @@ func (s *store) get(ctx context.Context, key string) (string, error) {
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":now": &types.AttributeValueMemberS{Value: now},
 		},
-		ReturnValues: types.ReturnValueAllNew,
 	})
 	if err == nil {
-		return unmarshal(out.Attributes)
+		// Item exists but is disabled: access recorded, credential withheld.
+		return "", ErrNotFound
 	}
 	if errors.As(err, &condErr) {
 		return "", ErrNotFound

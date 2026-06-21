@@ -59,7 +59,7 @@ func TestGetEnabledIncrementsCounter(t *testing.T) {
 	}
 }
 
-func TestGetDisabledDoesNotIncrement(t *testing.T) {
+func TestGetDisabledReturnsNotFound(t *testing.T) {
 	fake := &fakeDynamo{responses: []response{
 		{err: &types.ConditionalCheckFailedException{}},
 		{out: item(false, "10", "2026-06-21T13:26:00.123Z")},
@@ -67,16 +67,16 @@ func TestGetDisabledDoesNotIncrement(t *testing.T) {
 	s := &store{client: fake, tableName: "test-table"}
 
 	got, err := s.get(context.Background(), "abc")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if got != "" {
+		t.Errorf("credential = %q, want empty (withheld for disabled)", got)
 	}
 	if len(fake.calls) != 2 {
 		t.Fatalf("expected 2 UpdateItem calls, got %d", len(fake.calls))
 	}
-	if got != "secret-value" {
-		t.Errorf("credential = %q, want %q", got, "secret-value")
-	}
-	// Disabled-path call must only touch lastAccessedAt.
+	// Disabled-path call must still touch lastAccessedAt (and nothing else).
 	if expr := *fake.calls[1].UpdateExpression; expr != "SET lastAccessedAt = :now" {
 		t.Errorf("unexpected update expression: %q", expr)
 	}
